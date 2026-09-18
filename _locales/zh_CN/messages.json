@@ -1,15 +1,28 @@
 {
+  "messageControlsTopLimitLabel": { "message": "顶部限位（px）" },
+  "messageControlsTopLimitHint": { "message": "滚动时，按钮最多上移到距离窗口顶部此数值的位置；例如设为 80 可避开顶栏。" },
+  "buttonLayout": { "message": "按钮位置与大小" },
+  "buttonLayoutHint": { "message": "修改后自动保存并应用；位置超出窗口时会限制在可见范围内。" },
+  "messageControlsTitle": { "message": "单条回答按钮（Collapse / Lock）" },
+  "globalControlsTitle": { "message": "全局按钮（Collapse all / Expand all）" },
+  "resetButtonLayout": { "message": "恢复按钮默认位置与大小" },
+  "messageControlsSizeLabel": { "message": "按钮大小（%）" },
+  "messageControlsXLabel": { "message": "水平偏移（px，正数向右）" },
+  "messageControlsYLabel": { "message": "垂直偏移（px，正数向下）" },
+  "globalControlsSizeLabel": { "message": "按钮大小（%）" },
+  "globalControlsRightLabel": { "message": "距离右侧（px）" },
+  "globalControlsTopLabel": { "message": "距离顶部（px）" },
   "extensionName": {
     "message": "ChatGPT 对话折叠"
   },
   "extensionDescription": {
-    "message": "对 ChatGPT 长对话中的旧 assistant 消息做半虚拟化折叠，降低卡顿并保留可恢复能力。"
+    "message": "安全折叠 ChatGPT 长对话中的旧 assistant 消息，不移除 ChatGPT 页面节点。"
   },
   "popupTitle": {
     "message": "ChatGPT 对话折叠"
   },
   "popupSubtitle": {
-    "message": "对旧 assistant 消息进行半虚拟化与懒恢复，减少长对话页面卡顿。"
+    "message": "安全折叠旧 assistant 消息，不移除 ChatGPT 页面节点。"
   },
   "enableExtension": {
     "message": "启用扩展"
@@ -17,14 +30,8 @@
   "recentKeepCount": {
     "message": "最近保留展开的 assistant 条数"
   },
-  "keepLatestOnly": {
-    "message": "只保留最新一条 assistant 展开"
-  },
   "collapseComplex": {
     "message": "优先折叠含代码 / 公式的旧消息"
-  },
-  "extremeMemoryMode": {
-    "message": "极致省内存模式（不缓存完整节点）"
   },
   "debugMode": {
     "message": "开发者调试模式"
@@ -37,9 +44,6 @@
   },
   "currentSummary": {
     "message": "当前会话 assistant {0} 条，已折叠 {1} 条，视口附近可恢复 {2} 条{3}。"
-  },
-  "extremeSummarySuffix": {
-    "message": "，极致省内存模式已开启"
   },
   "notChatgptTab": {
     "message": "当前标签页未检测到可管理的 ChatGPT 会话。"
@@ -69,16 +73,10 @@
     "message": "无法读取当前页面状态。请确认当前标签页已打开 ChatGPT。"
   },
   "expandAllConfirm": {
-    "message": "展开全部会恢复当前会话中所有已折叠 assistant 消息，可能重新引入较多 DOM，短时间内会影响性能。是否继续？"
+    "message": "展开全部会恢复所有已折叠 assistant 消息，短时间内会增加布局与绘制工作。是否继续？"
   },
   "resetSessionConfirm": {
     "message": "这会清除当前会话的手动展开、锁定和折叠记录。是否继续？"
-  },
-  "cannotExpandExtreme": {
-    "message": "极致省内存模式下无法完整恢复全部消息。"
-  },
-  "extremeMemoryDisabledExpandNearby": {
-    "message": "极致省内存模式下无法恢复视口附近消息。"
   },
   "assistantMessage": {
     "message": "Assistant message"
@@ -94,9 +92,6 @@
   },
   "clickToRestore": {
     "message": "可点击恢复"
-  },
-  "noFullNodeCached": {
-    "message": "未缓存完整节点"
   },
   "expand": {
     "message": "展开"
@@ -148,5 +143,8 @@
   },
   "recollapsedOldMessages": {
     "message": "已重新按当前策略折叠旧消息。"
+  },
+  "collapseAll": {
+    "message": "折叠当前会话全部消息"
   }
 }

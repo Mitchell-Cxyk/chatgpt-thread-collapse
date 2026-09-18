@@ -10,7 +10,7 @@
     <main class="popup">
       <header class="popup-header">
         <h1>ChatGPT Thread Lite</h1>
-        <p>半虚拟化旧 assistant 消息，减少长对话页面卡顿。</p>
+        <p>安全折叠旧 assistant 消息，不移除 ChatGPT 页面节点。</p>
       </header>
 
       <section class="panel">
@@ -25,18 +25,8 @@
         </label>
 
         <label class="toggle-row">
-          <span>只保留最新一条 assistant 展开</span>
-          <input id="keepLatestOnly" type="checkbox">
-        </label>
-
-        <label class="toggle-row">
           <span>优先折叠含代码 / 公式的旧消息</span>
           <input id="autoCollapseComplex" type="checkbox">
-        </label>
-
-        <label class="toggle-row">
-          <span>极致省内存模式（不缓存完整节点）</span>
-          <input id="extremeMemoryMode" type="checkbox">
         </label>
 
         <label class="toggle-row">
@@ -46,13 +36,30 @@
       </section>
 
       <section class="panel">
-        <div class="panel-title">当前会话控制</div>
+        <div class="panel-title" id="sessionTitle">当前会话控制</div>
         <div class="hint" id="pageStateHint">正在读取当前页面状态…</div>
         <button id="expandNearby" class="action-btn">展开当前视口附近消息</button>
         <button id="expandAll" class="action-btn action-btn-primary">展开当前会话全部已折叠消息</button>
+        <button id="collapseAll" class="action-btn">折叠当前会话全部消息</button>
         <button id="restorePreviousCollapsed" class="action-btn">恢复上次折叠视图</button>
         <button id="recollapseOld" class="action-btn">重新折叠当前会话旧消息</button>
         <button id="resetSession" class="action-btn action-btn-danger">重置当前会话状态</button>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title" data-i18n="buttonLayout">按钮位置与大小</div>
+        <p class="hint" data-i18n="buttonLayoutHint">修改后自动保存并应用；位置超出窗口时会限制在可见范围内。</p>
+        <div class="layout-subtitle" data-i18n="messageControlsTitle">单条回答按钮（Collapse / Lock）</div>
+        <label class="field layout-field"><span data-i18n="messageControlsSizeLabel">按钮大小（%）</span><input id="messageControlsSize" type="number" min="60" max="180" step="1"></label>
+        <label class="field layout-field"><span data-i18n="messageControlsXLabel">水平偏移（px，正数向右）</span><input id="messageControlsX" type="number" min="-600" max="600" step="1"></label>
+        <label class="field layout-field"><span data-i18n="messageControlsYLabel">垂直偏移（px，正数向下）</span><input id="messageControlsY" type="number" min="-600" max="600" step="1"></label>
+        <label class="field layout-field"><span data-i18n="messageControlsTopLimitLabel">顶部限位（px）</span><input id="messageControlsTopLimit" type="number" min="8" max="600" step="1" aria-describedby="messageControlsTopLimitHint"></label>
+        <p class="hint" id="messageControlsTopLimitHint" data-i18n="messageControlsTopLimitHint">滚动时，按钮最多上移到距离窗口顶部此数值的位置；例如设为 80 可避开顶栏。</p>
+        <div class="layout-subtitle" data-i18n="globalControlsTitle">全局按钮（Collapse all / Expand all）</div>
+        <label class="field layout-field"><span data-i18n="globalControlsSizeLabel">按钮大小（%）</span><input id="globalControlsSize" type="number" min="60" max="180" step="1"></label>
+        <label class="field layout-field"><span data-i18n="globalControlsRightLabel">距离右侧（px）</span><input id="globalControlsRight" type="number" min="8" max="2000" step="1"></label>
+        <label class="field layout-field"><span data-i18n="globalControlsTopLabel">距离顶部（px）</span><input id="globalControlsTop" type="number" min="8" max="2000" step="1"></label>
+        <button id="resetButtonLayout" class="action-btn" data-i18n="resetButtonLayout">恢复按钮默认位置与大小</button>
       </section>
 
       <footer class="footer">

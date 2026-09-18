@@ -4,48 +4,60 @@
   const DEFAULT_SETTINGS = {
     enabled: true,
     keepRecentCount: 6,
-    keepLatestOnly: true,
     autoCollapseComplex: true,
-    extremeMemoryMode: false,
     debugMode: false,
-    nearbyExpandCount: 12
+    nearbyExpandCount: 12,
+    messageControlsSize: 100,
+    messageControlsX: 0,
+    messageControlsY: 0,
+    messageControlsTopLimit: 8,
+    globalControlsSize: 100,
+    globalControlsRight: 18,
+    globalControlsTop: 72
+  };
+
+  const LAYOUT_LIMITS = {
+    messageControlsSize: [60, 180],
+    messageControlsX: [-600, 600],
+    messageControlsY: [-600, 600],
+    messageControlsTopLimit: [8, 600],
+    globalControlsSize: [60, 180],
+    globalControlsRight: [8, 2000],
+    globalControlsTop: [8, 2000]
   };
 
   const FALLBACK_MESSAGES = {
     popupTitle: "ChatGPT Thread Collapse",
-    popupSubtitle: "Semi-virtualize and lazily restore old assistant messages to reduce long-thread lag.",
+    popupSubtitle: "Collapse old assistant messages without removing ChatGPT's live DOM nodes.",
     enableExtension: "Enable extension",
     recentKeepCount: "Keep the latest assistant messages expanded",
     collapseComplex: "Prefer collapsing code/math-heavy old messages",
-    extremeMemoryMode: "Extreme memory-saving mode (do not cache full nodes)",
     debugMode: "Developer debug mode",
     sessionControls: "Current thread controls",
     loadingPageState: "Reading current page state…",
     currentSummary: "assistant messages: {0}, collapsed: {1}, near viewport: {2}{3}.",
-    extremeSummarySuffix: ", extreme memory-saving mode enabled",
     notChatgptTab: "No manageable ChatGPT conversation was detected in the current tab.",
     saveStatus: "Settings saved.",
     settingsAutoSave: "Settings are saved automatically.",
     expandNearby: "Expand nearby messages",
     expandAll: "Expand all collapsed messages in this thread",
+    collapseAll: "Collapse all messages in this thread",
     restorePrevious: "Restore previous collapsed view",
     recollapseOld: "Re-collapse old messages in this thread",
     resetSession: "Reset current thread state",
     unableReadPageState: "Unable to read the current page state. Make sure this tab is a ChatGPT page.",
-    expandAllConfirm: "Expanding all will restore every collapsed assistant message in the current thread and may reintroduce a lot of DOM, which can hurt performance briefly. Continue?",
+    expandAllConfirm: "Expanding all will restore every collapsed assistant message and may briefly increase layout and paint work. Continue?",
     resetSessionConfirm: "This will clear manual expand, lock, and collapsed records for the current thread. Continue?",
-    cannotExpandExtreme: "Full restore is unavailable in extreme memory-saving mode."
   };
 
   const elements = {
     enabled: document.getElementById("enabled"),
     keepRecentCount: document.getElementById("keepRecentCount"),
-    keepLatestOnly: document.getElementById("keepLatestOnly"),
     autoCollapseComplex: document.getElementById("autoCollapseComplex"),
-    extremeMemoryMode: document.getElementById("extremeMemoryMode"),
     debugMode: document.getElementById("debugMode"),
     expandNearby: document.getElementById("expandNearby"),
     expandAll: document.getElementById("expandAll"),
+    collapseAll: document.getElementById("collapseAll"),
     restorePreviousCollapsed: document.getElementById("restorePreviousCollapsed"),
     recollapseOld: document.getElementById("recollapseOld"),
     resetSession: document.getElementById("resetSession"),
@@ -53,8 +65,11 @@
     saveStatus: document.getElementById("saveStatus"),
     popupTitle: document.querySelector(".popup-header h1"),
     popupSubtitle: document.querySelector(".popup-header p"),
-    sessionTitle: document.querySelector(".panel-title")
+    sessionTitle: document.getElementById("sessionTitle")
   };
+  Object.keys(LAYOUT_LIMITS).forEach((key) => {
+    elements[key] = document.getElementById(key);
+  });
 
   let currentPageState = null;
 
@@ -74,6 +89,10 @@
   }
 
   function applyI18n() {
+    document.querySelectorAll('[data-i18n]').forEach((element) => {
+      const message = chrome.i18n.getMessage(element.dataset.i18n);
+      if (message) element.textContent = message;
+    });
     document.title = t("popupTitle");
     if (elements.popupTitle) {
       elements.popupTitle.textContent = t("popupTitle");
@@ -87,12 +106,11 @@
 
     setLabelText("enabled", t("enableExtension"));
     setLabelText("keepRecentCount", t("recentKeepCount"));
-    setLabelText("keepLatestOnly", t("keepLatestOnly"));
     setLabelText("autoCollapseComplex", t("collapseComplex"));
-    setLabelText("extremeMemoryMode", t("extremeMemoryMode"));
     setLabelText("debugMode", t("debugMode"));
     setButtonText("expandNearby", t("expandNearby"));
     setButtonText("expandAll", t("expandAll"));
+    setButtonText("collapseAll", t("collapseAll"));
     setButtonText("restorePreviousCollapsed", t("restorePrevious"));
     setButtonText("recollapseOld", t("recollapseOld"));
     setButtonText("resetSession", t("resetSession"));
@@ -122,11 +140,11 @@
   function renderSettings(settings) {
     elements.enabled.checked = Boolean(settings.enabled);
     elements.keepRecentCount.value = String(settings.keepRecentCount);
-    elements.keepLatestOnly.checked = Boolean(settings.keepLatestOnly);
     elements.autoCollapseComplex.checked = Boolean(settings.autoCollapseComplex);
-    elements.extremeMemoryMode.checked = Boolean(settings.extremeMemoryMode);
     elements.debugMode.checked = Boolean(settings.debugMode);
-    syncRecentCountAvailability();
+    Object.entries(LAYOUT_LIMITS).forEach(([key, [min, max]]) => {
+      elements[key].value = clampNumber(settings[key], min, max, DEFAULT_SETTINGS[key]);
+    });
   }
 
   function bindSettings() {
@@ -134,39 +152,40 @@
       const nextSettings = {
         enabled: elements.enabled.checked,
         keepRecentCount: clampNumber(elements.keepRecentCount.value, 1, 50, DEFAULT_SETTINGS.keepRecentCount),
-        keepLatestOnly: elements.keepLatestOnly.checked,
         autoCollapseComplex: elements.autoCollapseComplex.checked,
-        extremeMemoryMode: elements.extremeMemoryMode.checked,
         debugMode: elements.debugMode.checked,
         nearbyExpandCount: DEFAULT_SETTINGS.nearbyExpandCount
       };
 
+      Object.entries(LAYOUT_LIMITS).forEach(([key, [min, max]]) => {
+        nextSettings[key] = clampNumber(elements[key].value, min, max, DEFAULT_SETTINGS[key]);
+        elements[key].value = nextSettings[key];
+      });
+
       await chrome.storage.local.set({ settings: nextSettings });
       elements.saveStatus.textContent = t("saveStatus");
-      syncRecentCountAvailability();
       await notifyActiveTab({ type: "settingsUpdated" });
       await refreshPageState();
     };
 
     elements.enabled.addEventListener("change", onChange);
     elements.keepRecentCount.addEventListener("change", onChange);
-    elements.keepLatestOnly.addEventListener("change", onChange);
     elements.autoCollapseComplex.addEventListener("change", onChange);
-    elements.extremeMemoryMode.addEventListener("change", onChange);
     elements.debugMode.addEventListener("change", onChange);
-  }
-
-  function syncRecentCountAvailability() {
-    elements.keepRecentCount.disabled = elements.keepLatestOnly.checked;
+    Object.keys(LAYOUT_LIMITS).forEach((key) => {
+      elements[key].addEventListener("change", onChange);
+    });
+    document.getElementById('resetButtonLayout').addEventListener('click', () => {
+      Object.keys(LAYOUT_LIMITS).forEach((key) => {
+        elements[key].value = DEFAULT_SETTINGS[key];
+      });
+      onChange();
+    });
   }
 
   function bindActions() {
     elements.expandNearby.addEventListener("click", () => runAction("expandNearby"));
     elements.expandAll.addEventListener("click", async () => {
-      if (currentPageState && currentPageState.extremeMemoryMode) {
-        elements.pageStateHint.textContent = t("cannotExpandExtreme");
-        return;
-      }
 
       const proceed = window.confirm(t("expandAllConfirm"));
       if (!proceed) {
@@ -174,6 +193,7 @@
       }
       await runAction("expandAll");
     });
+    elements.collapseAll.addEventListener("click", () => runAction("collapseAll"));
     elements.restorePreviousCollapsed.addEventListener("click", () => runAction("restorePreviousCollapsed"));
     elements.recollapseOld.addEventListener("click", () => runAction("recollapseOld"));
     elements.resetSession.addEventListener("click", async () => {
@@ -212,24 +232,26 @@
     const collapsedCount = currentPageState.collapsedCount || 0;
     const assistantCount = currentPageState.assistantCount || 0;
     const nearbyCount = currentPageState.nearbyCollapsedCount || 0;
-    const extremeText = currentPageState.extremeMemoryMode ? t("extremeSummarySuffix") : "";
+    const summarySuffix = "";
     elements.pageStateHint.textContent = formatMessage("currentSummary", [
       assistantCount,
       collapsedCount,
       nearbyCount,
-      extremeText
+      summarySuffix
     ]);
 
     setActionAvailability(true);
-    elements.expandAll.disabled = Boolean(currentPageState.extremeMemoryMode);
+    elements.expandAll.disabled = collapsedCount === 0;
+    elements.collapseAll.disabled = assistantCount === 0;
     elements.restorePreviousCollapsed.disabled = !Boolean(currentPageState.hasPreviousCollapsedSnapshot);
-    elements.expandNearby.disabled = nearbyCount === 0 || Boolean(currentPageState.extremeMemoryMode);
+    elements.expandNearby.disabled = nearbyCount === 0;
   }
 
   function setActionAvailability(enabled) {
     [
       elements.expandNearby,
       elements.expandAll,
+      elements.collapseAll,
       elements.restorePreviousCollapsed,
       elements.recollapseOld,
       elements.resetSession

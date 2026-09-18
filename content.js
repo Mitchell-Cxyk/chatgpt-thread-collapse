@@ -10,11 +10,16 @@
   const DEFAULT_SETTINGS = {
     enabled: true,
     keepRecentCount: 6,
-    keepLatestOnly: true,
     autoCollapseComplex: true,
-    extremeMemoryMode: false,
     debugMode: false,
-    nearbyExpandCount: 12
+    nearbyExpandCount: 12,
+    messageControlsSize: 100,
+    messageControlsX: 0,
+    messageControlsY: 0,
+    messageControlsTopLimit: 8,
+    globalControlsSize: 100,
+    globalControlsRight: 18,
+    globalControlsTop: 72
   };
 
   const DEFAULT_SESSION_STATE = {
@@ -40,8 +45,6 @@
     expandAllHeader: "Expand all",
     collapseAllHeader: "Collapse all",
     expandAllPerfHint: "Expanding all may briefly affect performance.",
-    extremeMemoryDisabledExpandAll: "Full restore is unavailable in extreme memory-saving mode.",
-    extremeMemoryDisabledExpandNearby: "Nearby restore is unavailable in extreme memory-saving mode.",
     noCollapsedMessages: "There are no collapsed messages in the current thread.",
     noNearbyCollapsedMessages: "No collapsed messages were found near the current viewport.",
     sessionResetDone: "Current thread state has been reset.",
@@ -52,7 +55,6 @@
     expandNearbyToast: "Restored {0} messages near the viewport.",
     expandAllToast: "Restored {0} messages. You can revert with the previous collapsed view.",
     currentSummary: "assistant messages: {0}, collapsed: {1}, near viewport: {2}{3}.",
-    extremeSummarySuffix: ", extreme memory-saving mode enabled",
     unableReadPageState: "Unable to read the current page state.",
     noChatgptConversation: "No manageable ChatGPT conversation was detected in the current tab.",
     restorePreviousCollapsed: "Restore previous collapsed view",
@@ -104,20 +106,16 @@
       ]
     },
     messages: {
-      turnCandidates: [
-        "[data-message-author-role='assistant']",
-        "[data-message-author-role='user']",
-        "[data-message-id]",
+      primaryTurnCandidates: [
         "article[data-testid^='conversation-turn-']",
-        "[data-testid^='conversation-turn-']",
-        "article",
-        "[role='article']"
+        "[data-testid^='conversation-turn-']"
       ],
       assistantHints: [
         "[data-message-author-role='assistant']",
         "[data-testid*='assistant']",
         "[aria-label*='Assistant']",
-        "[alt='ChatGPT']"
+        "[alt='ChatGPT']",
+        "svg title"
       ],
       userHints: [
         "[data-message-author-role='user']",
@@ -131,13 +129,6 @@
         "code",
         "table",
         "p"
-      ],
-      toolbarAnchors: [
-        "[data-message-author-role]",
-        "h5",
-        "header",
-        ".markdown",
-        "[class*='markdown']"
       ]
     },
     complexContent: {
@@ -154,26 +145,29 @@
     sessionKey: "",
     sessionState: cloneSessionState(DEFAULT_SESSION_STATE),
     messageRecords: new Map(),
-    collapsedCache: new Map(),
-    placeholderMap: new Map(),
+    collapsedNodes: new Map(),
+    messageControls: new Map(),
+    controlsLayer: null,
+    controlMessages: [],
+    controlsFrame: 0,
     observer: null,
-    observedRoot: null,
     scanTimer: null,
-    scrollEndTimer: null,
-    isScrolling: false,
-    scanInProgress: false,
-    pendingScan: false,
     debugCounter: 0,
     lastUrl: location.href,
-    latestToastTimer: 0
+    latestToastTimer: 0,
+    stopped: false,
+    urlTimer: 0
   };
 
   bootstrap().catch((error) => {
+    if (handleInvalidatedContext(error)) return;
     console.error("[ChatGPT Thread Lite] bootstrap failed", error);
   });
 
   async function bootstrap() {
+    if (!ensureActiveContext()) return;
     await loadPersistentState();
+    if (!ensureActiveContext()) return;
     bindRuntimeEvents();
     scheduleScan("bootstrap");
   }
@@ -188,20 +182,13 @@
   function bindRuntimeEvents() {
     startObserver();
 
-    window.addEventListener("scroll", () => {
-      state.isScrolling = true;
-      state.pendingScan = true;
-      clearTimeout(state.scrollEndTimer);
-      state.scrollEndTimer = window.setTimeout(() => {
-        state.isScrolling = false;
-        if (state.pendingScan) {
-          state.pendingScan = false;
-          scheduleScan("scroll settled");
-        }
-      }, 450);
-    }, { passive: true, capture: true });
+    document.addEventListener("click", handleCollapsedMessageActivation, true);
+    document.addEventListener("keydown", handleCollapsedMessageActivation, true);
+    window.addEventListener("scroll", scheduleMessageControlPositionUpdate, true);
+    window.addEventListener("resize", scheduleMessageControlPositionUpdate);
 
     chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (!ensureActiveContext()) return;
       if (areaName !== "local") {
         return;
       }
@@ -222,25 +209,25 @@
     });
 
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!ensureActiveContext()) return false;
       handleRuntimeMessage(message)
         .then(sendResponse)
         .catch((error) => {
+          if (handleInvalidatedContext(error)) return;
           console.warn("[ChatGPT Thread Lite] message failed", error);
           sendResponse({ ok: false, message: "扩展操作失败。" });
         });
       return true;
     });
 
-    window.addEventListener("beforeunload", () => {
-      disconnectObserver();
-      clearTimeout(state.scanTimer);
-      clearTimeout(state.scrollEndTimer);
-    });
+    window.addEventListener("beforeunload", stopContentScript);
 
-    setInterval(() => {
+    state.urlTimer = setInterval(() => {
+      if (!ensureActiveContext()) return;
       if (location.href !== state.lastUrl) {
         state.lastUrl = location.href;
         handleUrlChange().catch((error) => {
+          if (handleInvalidatedContext(error)) return;
           console.warn("[ChatGPT Thread Lite] failed to reload session state", error);
         });
       }
@@ -248,32 +235,26 @@
   }
 
   async function handleUrlChange() {
+    if (!ensureActiveContext()) return;
+    clearMessageControls();
+    restoreAllCollapsedNodesSilently();
     state.sessionKey = getSessionKey();
     const stored = await chrome.storage.local.get([STORAGE_KEYS.sessionStates]);
+    if (!ensureActiveContext()) return;
     state.sessionState = getStoredSessionState(stored[STORAGE_KEYS.sessionStates], state.sessionKey);
     state.messageRecords.clear();
-    state.collapsedCache.clear();
-    state.placeholderMap.clear();
+    state.collapsedNodes.clear();
     scheduleScan("url changed");
   }
 
   function startObserver() {
     disconnectObserver();
-    const root = findConversationRoot() || document.body;
-    if (!root) {
-      return;
-    }
-
-    state.observedRoot = root;
     state.observer = new MutationObserver((mutations) => {
-      if (!state.settings.enabled || state.scanInProgress) {
+      if (!state.settings.enabled) {
         return;
       }
 
       const relevant = mutations.some((mutation) => {
-        if (isExtensionNode(mutation.target)) {
-          return false;
-        }
         if (mutation.type === "childList" && (mutation.addedNodes.length || mutation.removedNodes.length)) {
           return true;
         }
@@ -284,15 +265,11 @@
       });
 
       if (relevant) {
-        state.pendingScan = true;
-        if (state.isScrolling) {
-          return;
-        }
         scheduleScan("mutation");
       }
     });
 
-    state.observer.observe(root, {
+    state.observer.observe(document.documentElement, {
       childList: true,
       subtree: true,
       characterData: true,
@@ -305,61 +282,47 @@
       state.observer.disconnect();
       state.observer = null;
     }
-    state.observedRoot = null;
   }
 
   function scheduleScan(reason) {
+    if (!ensureActiveContext()) return;
     clearTimeout(state.scanTimer);
-    state.pendingScan = true;
-    if (state.isScrolling) {
-      return;
-    }
     state.scanTimer = window.setTimeout(() => {
       scanAndApply(reason).catch((error) => {
+        if (handleInvalidatedContext(error)) return;
         console.warn("[ChatGPT Thread Lite] scan failed", error);
       });
-    }, 320);
+    }, 180);
   }
 
   async function scanAndApply(reason) {
-    if (state.scanInProgress || state.isScrolling) {
-      state.pendingScan = true;
-      return;
-    }
-
+    if (!ensureActiveContext()) return;
     if (!state.settings.enabled) {
       restoreAllCollapsedNodesSilently();
+      clearMessageControls();
+      removeGlobalControls();
       debugLog("scan skipped, disabled");
       return;
     }
 
-    state.scanInProgress = true;
-    state.pendingScan = false;
-    disconnectObserver();
-    try {
-      const messages = collectAssistantMessages();
-      applyGlobalHeaderControls(messages);
-      applyToolbarControls(messages);
-      applyVirtualization(messages);
-      cleanupStaleCaches(messages);
-      debugLog(`scan ${reason}`, {
-        assistantCount: messages.length,
-        collapsedCount: getCollapsedIds().length
-      });
-    } finally {
-      state.scanInProgress = false;
-      startObserver();
-    }
+    const messages = collectAssistantMessages();
+    applyVirtualization(messages);
+    applyGlobalHeaderControls(messages);
+    applyMessageControls(messages);
+    cleanupStaleCaches(messages);
+    debugLog(`scan ${reason}`, {
+      assistantCount: messages.length,
+      collapsedCount: getCollapsedIds().length
+    });
   }
-
   function collectAssistantMessages() {
     const root = findConversationRoot();
     if (!root) {
       return [];
     }
 
-    const candidates = uniqueElements(queryCandidates(root, SELECTORS.messages.turnCandidates));
-    const assistantMessages = new Map();
+    const candidates = collectMessageTurnCandidates(root);
+    const assistantMessages = [];
 
     candidates.forEach((node, index) => {
       if (!(node instanceof HTMLElement)) {
@@ -380,35 +343,32 @@
         return;
       }
 
-      assistantMessages.set(record.id, record);
+      assistantMessages.push(record);
     });
 
-    const records = Array.from(assistantMessages.values()).sort(compareMessageOrder);
-    records.forEach((record, index) => {
+    assistantMessages.sort((a, b) => a.index - b.index);
+    assistantMessages.forEach((record, index) => {
       record.order = index;
       if (record.node && record.node.dataset) {
         record.node.dataset[`${camelCase(EXTENSION_PREFIX)}MessageId`] = record.id;
       }
     });
 
-    return records;
+    return assistantMessages;
   }
 
-  function compareMessageOrder(left, right) {
-    if (left.node === right.node) {
-      return 0;
+  function collectMessageTurnCandidates(root) {
+    const primary = uniqueElements(queryCandidates(root, SELECTORS.messages.primaryTurnCandidates))
+      .filter((node) => !node.parentElement?.closest("[data-testid^='conversation-turn-']"));
+
+    if (primary.length) {
+      return primary;
     }
-    if (!left.node || !right.node || !left.node.isConnected || !right.node.isConnected) {
-      return left.index - right.index;
-    }
-    const position = left.node.compareDocumentPosition(right.node);
-    if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
-      return -1;
-    }
-    if (position & Node.DOCUMENT_POSITION_PRECEDING) {
-      return 1;
-    }
-    return left.index - right.index;
+
+    const roleNodes = Array.from(root.querySelectorAll("[data-message-author-role='assistant']"));
+    return uniqueElements(roleNodes.map((roleNode) => (
+      roleNode.closest("article, [role='article']") || roleNode
+    ))).filter((node) => node instanceof HTMLElement);
   }
 
   function findConversationRoot() {
@@ -431,15 +391,8 @@
     if (!node.isConnected) {
       return false;
     }
-    if (isExtensionNode(node)) {
-      return false;
-    }
     const text = getNodeText(node);
     if (!text) {
-      return false;
-    }
-    const hasMessageMarker = node.matches("[data-message-author-role], [data-message-id], [data-testid^='conversation-turn-'], article, [role='article']");
-    if (!hasMessageMarker) {
       return false;
     }
     const hasHint = SELECTORS.messages.contentHints.some((selector) => node.querySelector(selector));
@@ -450,6 +403,22 @@
     const explicitRole = node.getAttribute("data-message-author-role");
     if (explicitRole === "assistant" || explicitRole === "user") {
       return explicitRole;
+    }
+
+    const authorRoles = new Set(Array.from(node.querySelectorAll("[data-message-author-role]"))
+      .map((element) => element.getAttribute("data-message-author-role"))
+      .filter(Boolean));
+
+    if (authorRoles.size === 1 && authorRoles.has("assistant")) {
+      return "assistant";
+    }
+    if (authorRoles.size === 1 && authorRoles.has("user")) {
+      return "user";
+    }
+
+    // A container with both roles is a conversation wrapper, never a single turn.
+    if (authorRoles.size > 1) {
+      return "unknown";
     }
 
     if (queryCandidates(node, SELECTORS.messages.userHints).length > 0) {
@@ -468,39 +437,36 @@
       return "user";
     }
 
+    const labelText = (node.textContent || "").slice(0, 80);
+    if (/chatgpt/i.test(labelText)) {
+      return "assistant";
+    }
+
     return "unknown";
   }
 
   function getOrCreateMessageRecord(node, fallbackIndex) {
-    const messageNode = resolveMessageContainer(node);
-    const summary = createTextSummary(messageNode);
+    const summary = createTextSummary(node);
     if (!summary) {
       return null;
     }
 
-    const id = buildMessageId(messageNode, summary, fallbackIndex);
+    const id = buildMessageId(node, summary, fallbackIndex);
     const existing = state.messageRecords.get(id) || {};
     const record = {
       id,
-      node: messageNode,
+      node,
       summary,
       index: fallbackIndex,
       order: existing.order || fallbackIndex,
-      complex: detectComplexity(messageNode),
-      hasToolbar: existing.hasToolbar || false,
+      complex: detectComplexity(node),
+      hostAccessibility: existing.hostAccessibility || null,
       collapsed: state.sessionState.collapsed[id] === true,
       locked: state.sessionState.lockedExpanded[id] === true,
       manuallyExpanded: state.sessionState.manualExpanded[id] === true
     };
     state.messageRecords.set(id, record);
     return record;
-  }
-
-  function resolveMessageContainer(node) {
-    const container = node.closest(
-      "article[data-testid^='conversation-turn-'], [data-testid^='conversation-turn-'], article, [role='article']"
-    );
-    return container instanceof HTMLElement ? container : node;
   }
 
   function buildMessageId(node, summary, fallbackIndex) {
@@ -520,28 +486,16 @@
     return sanitizeId(`${state.sessionKey}-${rolePart}-${fallbackIndex}-${pathIndex}-${summaryHash}`);
   }
 
-  function applyToolbarControls(messages) {
-    messages.forEach((record) => {
-      if (!record.node || !record.node.isConnected) {
-        return;
-      }
-      if (record.node.dataset[`${camelCase(EXTENSION_PREFIX)}Placeholder`] === "true") {
-        return;
-      }
-      injectToolbar(record);
-    });
-  }
-
   function applyGlobalHeaderControls(messages) {
-    const anchor = findGlobalHeaderAnchor();
-    if (!anchor) {
+    if (!document.body) {
       return;
     }
 
-    let container = anchor.querySelector(`.${EXTENSION_PREFIX}-global-controls`);
+    let container = document.querySelector(`.${EXTENSION_PREFIX}-global-controls`);
     if (!container) {
       container = document.createElement("div");
       container.className = `${EXTENSION_PREFIX}-global-controls`;
+      container.setAttribute("aria-label", t("assistantMessage"));
 
       const expandAllBtn = createButton(t("expandAllHeader"), "primary", "global-expand-all", () => {
         expandAllCollapsedMessages().catch(handleSoftError);
@@ -551,111 +505,213 @@
         collapseAllMessages().catch(handleSoftError);
       });
 
-      container.append(expandAllBtn, collapseAllBtn);
-      anchor.appendChild(container);
+      container.append(collapseAllBtn, expandAllBtn);
+      document.body.appendChild(container);
     }
 
     const expandAllBtn = container.querySelector("[data-action='global-expand-all']");
+    positionGlobalControls();
     const collapseAllBtn = container.querySelector("[data-action='global-collapse-all']");
     const collapsedCount = getCollapsedIds().length;
-    const assistantCount = messages.length;
 
     if (expandAllBtn) {
-      expandAllBtn.disabled = state.settings.extremeMemoryMode || collapsedCount === 0;
-      expandAllBtn.title = state.settings.extremeMemoryMode
-        ? t("extremeMemoryDisabledExpandAll")
-        : t("expandAll");
+      expandAllBtn.disabled = collapsedCount === 0;
+      expandAllBtn.title = t("expandAll");
     }
 
     if (collapseAllBtn) {
-      collapseAllBtn.disabled = assistantCount <= 1;
+      collapseAllBtn.disabled = messages.length === 0;
       collapseAllBtn.title = t("collapseAllHeader");
     }
   }
-
-  function findGlobalHeaderAnchor() {
-    for (const selector of SELECTORS.header.anchors) {
-      const node = document.querySelector(selector);
-      if (!(node instanceof HTMLElement) || !node.isConnected) {
-        continue;
-      }
-
-      if (node.querySelector("h1, h2, nav, button")) {
-        return node;
-      }
+  function removeGlobalControls() {
+    const controls = document.querySelector(`.${EXTENSION_PREFIX}-global-controls`);
+    if (controls) {
+      controls.remove();
     }
-    return null;
   }
 
-  function injectToolbar(record) {
-    const existing = record.node.querySelector(`.${EXTENSION_PREFIX}-toolbar`);
-    if (existing) {
-      syncToolbarState(record, existing);
+  function layoutSetting(key, min, max) {
+    const value = Number(state.settings[key]);
+    return Math.max(min, Math.min(max, Number.isFinite(value) ? value : DEFAULT_SETTINGS[key]));
+  }
+
+  function positionGlobalControls() {
+    const controls = document.querySelector(`.${EXTENSION_PREFIX}-global-controls`);
+    if (!controls) return;
+    controls.style.setProperty('--ctl-scale', layoutSetting('globalControlsSize', 60, 180) / 100);
+    const bounds = controls.getBoundingClientRect();
+    controls.style.right = `${Math.max(8, Math.min(window.innerWidth - Math.ceil(bounds.width) - 8,
+      layoutSetting('globalControlsRight', 8, 2000)))}px`;
+    controls.style.top = `${Math.max(8, Math.min(window.innerHeight - Math.ceil(bounds.height) - 8,
+      layoutSetting('globalControlsTop', 8, 2000)))}px`;
+  }
+
+  function ensureControlsLayer() {
+    if (state.controlsLayer && state.controlsLayer.isConnected) {
+      return state.controlsLayer;
+    }
+    const layer = document.createElement("div");
+    layer.className = `${EXTENSION_PREFIX}-controls-layer`;
+    layer.setAttribute("aria-label", t("assistantMessage"));
+    document.body.appendChild(layer);
+    state.controlsLayer = layer;
+    return layer;
+  }
+
+  function applyMessageControls(messages) {
+    state.controlMessages = messages;
+    renderMessageControlsForViewport();
+  }
+
+  function renderMessageControlsForViewport() {
+    if (!state.settings.enabled || !document.body) {
       return;
     }
 
-    const anchor = findToolbarAnchor(record.node);
-    if (!anchor || !anchor.parentNode) {
-      return;
-    }
+    const layer = ensureControlsLayer();
+    const visibleIds = new Set();
+    state.controlMessages.forEach((record) => {
+      if (!record.node || !record.node.isConnected) {
+        return;
+      }
+      const rect = record.node.getBoundingClientRect();
+      if (rect.bottom < -48 || rect.top > window.innerHeight + 48) {
+        return;
+      }
 
-    const toolbar = document.createElement("div");
-    toolbar.className = `${EXTENSION_PREFIX}-toolbar`;
-    toolbar.dataset.messageId = record.id;
-
-    const collapseBtn = createButton(t("collapse"), "default", "collapse", () => {
-      collapseMessage(record.id, { manual: true }).catch(handleSoftError);
+      visibleIds.add(record.id);
+      let controls = state.messageControls.get(record.id);
+      if (!controls || !controls.isConnected) {
+        controls = createMessageControl(record);
+        layer.appendChild(controls);
+        state.messageControls.set(record.id, controls);
+      }
+      syncMessageControl(record, controls, rect);
     });
 
-    const expandBtn = createButton(t("expand"), "primary", "expand", () => {
-      expandMessage(record.id, { manual: true, persist: true }).catch(handleSoftError);
+    Array.from(state.messageControls.entries()).forEach(([id, controls]) => {
+      if (!visibleIds.has(id)) {
+        controls.remove();
+        state.messageControls.delete(id);
+      }
+    });
+  }
+  function createMessageControl(record) {
+    const controls = document.createElement("div");
+    controls.className = `${EXTENSION_PREFIX}-message-controls`;
+    controls.dataset.messageId = record.id;
+
+    const toggleBtn = createButton("", "default", "message-toggle", () => {
+      const current = state.messageRecords.get(record.id);
+      if (!current) {
+        return;
+      }
+      const operation = isCollapsed(record.id)
+        ? expandMessage(record.id, { manual: true, persist: true })
+        : collapseMessage(record.id, { manual: true });
+      operation
+        .then(() => scheduleScan("message control toggled"))
+        .catch(handleSoftError);
     });
 
-    const lockBtn = createButton(t("lock"), "default", "lock", () => {
+    const lockBtn = createButton("", "default", "message-lock", () => {
       toggleLock(record.id).catch(handleSoftError);
     });
-
-    toolbar.append(collapseBtn, expandBtn, lockBtn);
-    anchor.parentNode.insertBefore(toolbar, anchor);
-    syncToolbarState(record, toolbar);
+    controls.append(toggleBtn, lockBtn);
+    return controls;
   }
 
-  function syncToolbarState(record, toolbar) {
+  function syncMessageControl(record, controls, rect) {
     const collapsed = isCollapsed(record.id);
-    const lockBtn = toolbar.querySelector("[data-action='lock']");
-    const collapseBtn = toolbar.querySelector("[data-action='collapse']");
-    const expandBtn = toolbar.querySelector("[data-action='expand']");
+    const locked = state.sessionState.lockedExpanded[record.id] === true;
+    const toggleBtn = controls.querySelector("[data-action='message-toggle']");
+    const lockBtn = controls.querySelector("[data-action='message-lock']");
 
+    setButtonTextIfChanged(toggleBtn, collapsed ? t("expand") : t("collapse"));
+    if (toggleBtn) {
+      toggleBtn.dataset.variant = collapsed ? "primary" : "default";
+      toggleBtn.disabled = locked && !collapsed;
+      toggleBtn.title = collapsed ? t("expand") : t("collapse");
+    }
+
+    setButtonTextIfChanged(lockBtn, locked ? t("locked") : t("lock"));
     if (lockBtn) {
-      lockBtn.classList.toggle("is-active", Boolean(record.locked));
-      lockBtn.textContent = record.locked ? t("locked") : t("lock");
+      lockBtn.classList.toggle("is-active", locked);
+      lockBtn.title = t("permanentExpand");
     }
-    if (collapseBtn) {
-      collapseBtn.disabled = collapsed;
-    }
-    if (expandBtn) {
-      expandBtn.disabled = !collapsed;
+
+    controls.classList.toggle("is-collapsed", collapsed);
+    controls.setAttribute("aria-label", record.summary || t("assistantMessage"));
+    controls.style.setProperty('--ctl-scale', layoutSetting('messageControlsSize', 60, 180) / 100);
+    const bounds = controls.getBoundingClientRect();
+    const width = Math.ceil(bounds.width) || 64;
+    const height = Math.ceil(bounds.height) || 48;
+    const bottomLimit = Math.max(8, window.innerHeight - height - 8);
+    const topLimit = Math.min(bottomLimit, layoutSetting('messageControlsTopLimit', 8, 600));
+    const top = Math.max(topLimit, Math.min(bottomLimit,
+      rect.top + 6 + layoutSetting('messageControlsY', -600, 600)));
+    const left = Math.max(8, Math.min(window.innerWidth - width - 8,
+      rect.left - width - 8 + layoutSetting('messageControlsX', -600, 600)));
+    controls.style.top = `${top}px`;
+    controls.style.left = `${left}px`;
+  }
+
+  function setButtonTextIfChanged(button, label) {
+    if (button && button.textContent !== label) {
+      button.textContent = label;
     }
   }
 
+  function scheduleMessageControlPositionUpdate() {
+    if (!ensureActiveContext()) return;
+    if (state.controlsFrame) {
+      cancelAnimationFrame(state.controlsFrame);
+    }
+    state.controlsFrame = requestAnimationFrame(() => {
+      state.controlsFrame = 0;
+      if (!ensureActiveContext()) return;
+      try {
+        positionGlobalControls();
+        renderMessageControlsForViewport();
+      } catch (error) {
+        handleSoftError(error);
+      }
+    });
+  }
+
+  function clearMessageControls() {
+    if (state.controlsFrame) {
+      cancelAnimationFrame(state.controlsFrame);
+      state.controlsFrame = 0;
+    }
+    state.messageControls.forEach((controls) => controls.remove());
+    state.messageControls.clear();
+    state.controlMessages = [];
+    if (state.controlsLayer) {
+      state.controlsLayer.remove();
+      state.controlsLayer = null;
+    }
+  }
   function applyVirtualization(messages) {
     const keepRecentCount = Math.max(1, Number(state.settings.keepRecentCount) || DEFAULT_SETTINGS.keepRecentCount);
-    const lastExpandableIndex = Math.max(0, messages.length - 1);
 
     messages.forEach((record, index) => {
       record.collapsed = isCollapsed(record.id);
       record.locked = state.sessionState.lockedExpanded[record.id] === true;
       record.manuallyExpanded = state.sessionState.manualExpanded[record.id] === true;
 
-      const isLatest = index === lastExpandableIndex;
-      const keepBecauseRecent = state.settings.keepLatestOnly
-        ? isLatest
-        : index >= messages.length - keepRecentCount;
+      const keepBecauseRecent = index >= messages.length - keepRecentCount;
       const keepBecauseManual = record.locked || record.manuallyExpanded;
+      const wasPersistedCollapsed = state.sessionState.collapsed[record.id] === true;
+      // Complex content must not automatically hide the reply being read or streamed.
+      // Explicit collapse actions still take precedence for the latest reply.
+      const isLatestReply = index === messages.length - 1;
       const shouldPreferCollapse = state.settings.autoCollapseComplex
         ? (record.complex || !keepBecauseRecent)
         : !keepBecauseRecent;
-      const shouldCollapse = !isLatest && !keepBecauseManual && shouldPreferCollapse;
+      const shouldCollapse = !keepBecauseManual
+        && (wasPersistedCollapsed || (!isLatestReply && shouldPreferCollapse));
 
       if (shouldCollapse) {
         if (!record.collapsed) {
@@ -665,209 +721,149 @@
         }
       } else if (record.collapsed) {
         expandMessageSync(record.id, { manual: false, persist: false });
-      } else {
-        syncToolbarState(record, record.node.querySelector(`.${EXTENSION_PREFIX}-toolbar`) || null);
       }
     });
   }
 
   async function collapseMessage(messageId, options) {
-    collapseMessageSync(messageId, options);
-    await persistSessionState();
+    const ok = collapseMessageSync(messageId, options);
+    if (ok) {
+      await persistSessionState();
+      scheduleScan("message collapsed");
+    }
+    return ok;
   }
 
   function collapseMessageSync(messageId, options) {
     const record = state.messageRecords.get(messageId);
     if (!record || !record.node || !record.node.isConnected) {
-      return;
+      return false;
     }
 
-    const conversationRoot = findConversationRoot();
-    if (conversationRoot && (record.node === conversationRoot || record.node.contains(conversationRoot))) {
-      debugLog("skip unsafe message container", { messageId });
-      return;
+    if (isCollapsed(messageId) || state.sessionState.lockedExpanded[messageId]) {
+      return false;
     }
 
-    if (isCollapsed(messageId)) {
-      hideCollapsedSource(record.node);
-      return;
-    }
+    const node = record.node;
+    const summary = record.summary || createTextSummary(node);
+    saveHostAccessibilityAttributes(record, node);
 
-    if (state.sessionState.lockedExpanded[messageId]) {
-      return;
-    }
+    node.classList.add(`${EXTENSION_PREFIX}-collapsed`);
+    node.dataset[`${camelCase(EXTENSION_PREFIX)}Collapsed`] = "true";
+    node.dataset[`${camelCase(EXTENSION_PREFIX)}Summary`] = summary;
+    node.dataset[`${camelCase(EXTENSION_PREFIX)}Hint`] = t("clickToRestore");
+    node.setAttribute("role", "button");
+    node.setAttribute("tabindex", "0");
+    node.setAttribute("aria-expanded", "false");
+    node.setAttribute("title", `${t("collapsedHint")} — ${t("clickToRestore")}`);
 
-    const summary = record.summary || createTextSummary(record.node);
-    const placeholder = createPlaceholder(record, summary);
-    const originalNode = record.node;
-    const previousAriaHidden = originalNode.getAttribute("aria-hidden");
-    const previousDisplay = originalNode.style.getPropertyValue("display");
-    const previousDisplayPriority = originalNode.style.getPropertyPriority("display");
-
-    if (!state.settings.extremeMemoryMode) {
-      state.collapsedCache.set(messageId, {
-        node: originalNode,
-        summary,
-        previousAriaHidden,
-        previousDisplay,
-        previousDisplayPriority,
-        collapsedAt: Date.now()
-      });
-    } else {
-      state.collapsedCache.delete(messageId);
-    }
-
-    try {
-      hideCollapsedSource(originalNode);
-      originalNode.parentNode.insertBefore(placeholder, originalNode);
-      state.placeholderMap.set(messageId, placeholder);
-      state.sessionState.collapsed[messageId] = true;
-      delete state.sessionState.manualExpanded[messageId];
-      record.summary = summary;
-      record.collapsed = true;
-      syncPlaceholderState(record, placeholder);
-    } catch (error) {
-      restoreCollapsedSource(originalNode, {
-        previousAriaHidden,
-        previousDisplay,
-        previousDisplayPriority
-      });
-      placeholder.remove();
-      handleSoftError(error);
-    }
+    state.collapsedNodes.set(messageId, node);
+    state.sessionState.collapsed[messageId] = true;
+    delete state.sessionState.manualExpanded[messageId];
+    record.summary = summary;
+    record.collapsed = true;
 
     if (options && options.manual) {
       showToast(t("collapsedMessage"));
     }
+    return true;
   }
 
   async function expandMessage(messageId, options) {
     const ok = expandMessageSync(messageId, options);
     if (ok) {
       await persistSessionState();
+      scheduleScan("message expanded");
     }
+    return ok;
   }
 
   function expandMessageSync(messageId, options) {
-    const placeholder = state.placeholderMap.get(messageId);
-    if (!placeholder || !placeholder.isConnected) {
+    const record = state.messageRecords.get(messageId);
+    const node = state.collapsedNodes.get(messageId) || (record && record.node);
+    if (!node || !node.isConnected || !node.classList.contains(`${EXTENSION_PREFIX}-collapsed`)) {
       return false;
     }
 
-    const cached = state.collapsedCache.get(messageId);
-    if (!cached || !cached.node) {
-      if (state.settings.extremeMemoryMode) {
-        showToast(t("noFullNodeCached"));
+    node.classList.remove(`${EXTENSION_PREFIX}-collapsed`);
+    delete node.dataset[`${camelCase(EXTENSION_PREFIX)}Collapsed`];
+    delete node.dataset[`${camelCase(EXTENSION_PREFIX)}Summary`];
+    delete node.dataset[`${camelCase(EXTENSION_PREFIX)}Hint`];
+    restoreHostAccessibilityAttributes(record, node);
+
+    state.collapsedNodes.delete(messageId);
+    delete state.sessionState.collapsed[messageId];
+    if (options && options.persist) {
+      state.sessionState.manualExpanded[messageId] = true;
+    }
+    if (record) {
+      record.collapsed = false;
+      record.manuallyExpanded = state.sessionState.manualExpanded[messageId] === true;
+      record.locked = state.sessionState.lockedExpanded[messageId] === true;
+    }
+    return true;
+  }
+
+  function handleCollapsedMessageActivation(event) {
+    if (!ensureActiveContext()) return;
+    if (event.type === "keydown" && event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    if (event.type === "click" && event.button !== 0) {
+      return;
+    }
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+
+    const node = event.target.closest(`.${EXTENSION_PREFIX}-collapsed`);
+    if (!(node instanceof HTMLElement)) {
+      return;
+    }
+
+    const messageId = node.dataset[`${camelCase(EXTENSION_PREFIX)}MessageId`];
+    if (!messageId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    expandMessage(messageId, { manual: true, persist: true }).catch(handleSoftError);
+  }
+
+  function saveHostAccessibilityAttributes(record, node) {
+    if (record.hostAccessibility) {
+      return;
+    }
+    record.hostAccessibility = {
+      role: node.getAttribute("role"),
+      tabindex: node.getAttribute("tabindex"),
+      ariaExpanded: node.getAttribute("aria-expanded"),
+      title: node.getAttribute("title")
+    };
+  }
+
+  function restoreHostAccessibilityAttributes(record, node) {
+    if (!record || !record.hostAccessibility) {
+      ["role", "tabindex", "aria-expanded", "title"].forEach((name) => node.removeAttribute(name));
+      return;
+    }
+
+    const attributes = {
+      role: record.hostAccessibility.role,
+      tabindex: record.hostAccessibility.tabindex,
+      "aria-expanded": record.hostAccessibility.ariaExpanded,
+      title: record.hostAccessibility.title
+    };
+    Object.entries(attributes).forEach(([name, value]) => {
+      if (value === null) {
+        node.removeAttribute(name);
       } else {
-        showToast(t("noFullNodeCached"));
-      }
-      return false;
-    }
-
-    try {
-      placeholder.remove();
-      restoreCollapsedSource(cached.node, cached);
-      state.placeholderMap.delete(messageId);
-      delete state.sessionState.collapsed[messageId];
-      if (options && options.persist) {
-        state.sessionState.manualExpanded[messageId] = true;
-      }
-      const record = state.messageRecords.get(messageId);
-      if (record) {
-        record.node = cached.node;
-        record.collapsed = false;
-        record.manuallyExpanded = state.sessionState.manualExpanded[messageId] === true;
-        record.locked = state.sessionState.lockedExpanded[messageId] === true;
-        injectToolbar(record);
-        const toolbar = cached.node.querySelector(`.${EXTENSION_PREFIX}-toolbar`);
-        if (toolbar) {
-          syncToolbarState(record, toolbar);
-        }
-      }
-      return true;
-    } catch (error) {
-      handleSoftError(error);
-      return false;
-    }
-  }
-
-  function createPlaceholder(record, summary) {
-    const placeholder = document.createElement("section");
-    placeholder.className = `${EXTENSION_PREFIX}-placeholder`;
-    placeholder.dataset.messageId = record.id;
-    placeholder.dataset[`${camelCase(EXTENSION_PREFIX)}Placeholder`] = "true";
-
-    const summaryNode = document.createElement("div");
-    summaryNode.className = `${EXTENSION_PREFIX}-placeholder-summary`;
-    summaryNode.textContent = summary || "";
-
-    const actions = document.createElement("div");
-    actions.className = `${EXTENSION_PREFIX}-placeholder-actions`;
-
-    const expandBtn = createButton(t("expand"), "primary", "expand", () => {
-      expandMessage(record.id, { manual: true, persist: true }).catch(handleSoftError);
-    });
-    expandBtn.disabled = state.settings.extremeMemoryMode;
-
-    const restoreBtn = createButton(t("restoreDefaultFold"), "default", "restore", () => {
-      delete state.sessionState.manualExpanded[record.id];
-      persistSessionState().catch(handleSoftError);
-      showToast(t("restoreDefaultFold"));
-    });
-
-    const lockBtn = createButton(record.locked ? t("locked") : t("permanentExpand"), "default", "lock", () => {
-      toggleLock(record.id).catch(handleSoftError);
-    });
-    lockBtn.classList.toggle("is-active", Boolean(record.locked));
-
-    actions.append(expandBtn, lockBtn, restoreBtn);
-    placeholder.append(summaryNode, actions);
-    return placeholder;
-  }
-
-  function hideCollapsedSource(node) {
-    if (!node || !(node instanceof HTMLElement)) {
-      return;
-    }
-    node.classList.add(`${EXTENSION_PREFIX}-source-collapsed`);
-    node.style.setProperty("display", "none", "important");
-    node.setAttribute("aria-hidden", "true");
-  }
-
-  function restoreCollapsedSource(node, cached) {
-    if (!node || !(node instanceof HTMLElement)) {
-      return;
-    }
-    node.classList.remove(`${EXTENSION_PREFIX}-source-collapsed`);
-    if (cached && cached.previousDisplay) {
-      node.style.setProperty("display", cached.previousDisplay, cached.previousDisplayPriority || "");
-    } else {
-      node.style.removeProperty("display");
-    }
-    if (!cached || cached.previousAriaHidden === null || cached.previousAriaHidden === undefined) {
-      node.removeAttribute("aria-hidden");
-    } else {
-      node.setAttribute("aria-hidden", cached.previousAriaHidden);
-    }
-  }
-
-  function syncPlaceholderState(record, placeholder) {
-    if (!placeholder) {
-      return;
-    }
-    const buttons = placeholder.querySelectorAll(`.${EXTENSION_PREFIX}-btn`);
-    buttons.forEach((button) => {
-      const action = button.dataset.action;
-      if (action === "expand") {
-        button.disabled = state.settings.extremeMemoryMode;
-      }
-      if (action === "lock") {
-        button.classList.toggle("is-active", Boolean(record.locked));
-        button.textContent = record.locked ? t("locked") : t("permanentExpand");
+        node.setAttribute(name, value);
       }
     });
+    record.hostAccessibility = null;
   }
-
   async function toggleLock(messageId) {
     if (state.sessionState.lockedExpanded[messageId]) {
       delete state.sessionState.lockedExpanded[messageId];
@@ -888,7 +884,9 @@
   }
 
   async function persistSessionState() {
+    if (!ensureActiveContext()) return;
     const stored = await chrome.storage.local.get([STORAGE_KEYS.sessionStates]);
+    if (!ensureActiveContext()) return;
     const allStates = stored[STORAGE_KEYS.sessionStates] || {};
     allStates[state.sessionKey] = cloneSessionState(state.sessionState);
     await chrome.storage.local.set({ [STORAGE_KEYS.sessionStates]: allStates });
@@ -921,6 +919,8 @@
         return expandNearbyMessages();
       case "expandAll":
         return expandAllCollapsedMessages();
+      case "collapseAll":
+        return collapseAllMessages();
       case "restorePreviousCollapsed":
         return restorePreviousCollapsedSnapshot();
       case "recollapseOld":
@@ -943,17 +943,12 @@
       assistantCount: messages.length,
       collapsedCount: collapsedIds.length,
       nearbyCollapsedCount: nearbyCollapsedIds.length,
-      extremeMemoryMode: Boolean(state.settings.extremeMemoryMode),
       hasPreviousCollapsedSnapshot: Array.isArray(state.sessionState.lastBulkCollapsedSnapshot)
         && state.sessionState.lastBulkCollapsedSnapshot.length > 0
     };
   }
 
   async function expandNearbyMessages() {
-    if (state.settings.extremeMemoryMode) {
-      return { ok: false, message: t("extremeMemoryDisabledExpandNearby") };
-    }
-
     const ids = getCollapsedIdsNearViewport(state.settings.nearbyExpandCount);
     if (!ids.length) {
       return { ok: true, message: t("noNearbyCollapsedMessages") };
@@ -972,10 +967,6 @@
   }
 
   async function expandAllCollapsedMessages() {
-    if (state.settings.extremeMemoryMode) {
-      return { ok: false, message: t("extremeMemoryDisabledExpandAll") };
-    }
-
     const ids = getCollapsedIds();
     if (!ids.length) {
       return { ok: true, message: t("noCollapsedMessages") };
@@ -1013,6 +1004,7 @@
   }
 
   async function recollapseOldMessages() {
+    state.sessionState.manualExpanded = {};
     const messages = collectAssistantMessages();
     applyVirtualization(messages);
     await persistSessionState();
@@ -1029,9 +1021,8 @@
     state.sessionState.lastBulkCollapsedSnapshot = getCollapsedIds();
     let collapsed = 0;
 
-    messages.forEach((record, index) => {
-      const isLatest = index === messages.length - 1;
-      if (isLatest || state.sessionState.lockedExpanded[record.id]) {
+    messages.forEach((record) => {
+      if (state.sessionState.lockedExpanded[record.id]) {
         return;
       }
       if (!isCollapsed(record.id)) {
@@ -1057,30 +1048,36 @@
   }
 
   function restoreAllCollapsedNodesSilently() {
-    const ids = Array.from(state.placeholderMap.keys());
-    ids.forEach((id) => {
+    Array.from(state.collapsedNodes.keys()).forEach((id) => {
       expandMessageSync(id, { manual: false, persist: false });
     });
   }
 
   function getCollapsedIds() {
-    return Array.from(state.placeholderMap.keys()).filter((id) => {
-      const placeholder = state.placeholderMap.get(id);
-      return placeholder && placeholder.isConnected;
-    });
+    return Array.from(state.collapsedNodes.entries())
+      .filter(([, node]) => (
+        node
+        && node.isConnected
+        && node.classList.contains(`${EXTENSION_PREFIX}-collapsed`)
+      ))
+      .map(([id]) => id);
   }
 
   function getCollapsedIdsNearViewport(nearbyCount) {
-    const placeholders = Array.from(state.placeholderMap.entries())
+    const collapsed = Array.from(state.collapsedNodes.entries())
       .map(([id, node]) => ({ id, node }))
-      .filter((item) => item.node && item.node.isConnected);
+      .filter((item) => (
+        item.node
+        && item.node.isConnected
+        && item.node.classList.contains(`${EXTENSION_PREFIX}-collapsed`)
+      ));
 
-    if (!placeholders.length) {
+    if (!collapsed.length) {
       return [];
     }
 
     const viewportCenter = window.scrollY + (window.innerHeight / 2);
-    const sorted = placeholders
+    const sorted = collapsed
       .map((item) => {
         const rect = item.node.getBoundingClientRect();
         const absoluteTop = rect.top + window.scrollY;
@@ -1096,19 +1093,22 @@
 
   function cleanupStaleCaches(messages) {
     const knownIds = new Set(messages.map((message) => message.id));
-    Array.from(state.collapsedCache.keys()).forEach((id) => {
-      if (!knownIds.has(id) && !state.placeholderMap.has(id)) {
-        state.collapsedCache.delete(id);
+    Array.from(state.collapsedNodes.entries()).forEach(([id, node]) => {
+      if (!node || !node.isConnected) {
+        state.collapsedNodes.delete(id);
+        return;
       }
-    });
-    Array.from(state.placeholderMap.keys()).forEach((id) => {
-      const placeholder = state.placeholderMap.get(id);
-      if (!placeholder || !placeholder.isConnected) {
-        state.placeholderMap.delete(id);
+      if (!knownIds.has(id)) {
+        node.classList.remove(`${EXTENSION_PREFIX}-collapsed`);
+        delete node.dataset[`${camelCase(EXTENSION_PREFIX)}Collapsed`];
+        delete node.dataset[`${camelCase(EXTENSION_PREFIX)}Summary`];
+        delete node.dataset[`${camelCase(EXTENSION_PREFIX)}Hint`];
+        restoreHostAccessibilityAttributes(state.messageRecords.get(id), node);
+        state.collapsedNodes.delete(id);
+        delete state.sessionState.collapsed[id];
       }
     });
   }
-
   function createTextSummary(node) {
     const rawText = getNodeText(node)
       .replace(/\s+/g, " ")
@@ -1132,16 +1132,6 @@
     return counts.code > 0 || counts.math > 0 || counts.table > 0 || counts.list >= 6 || counts.quote >= 3 || textLength > 3200;
   }
 
-  function isExtensionNode(node) {
-    const element = node instanceof Element ? node : node && node.parentElement;
-    if (!element) {
-      return false;
-    }
-    return Boolean(element.closest(
-      `.${EXTENSION_PREFIX}-placeholder, .${EXTENSION_PREFIX}-toolbar, .${EXTENSION_PREFIX}-global-controls, .${EXTENSION_PREFIX}-toast`
-    ));
-  }
-
   function queryCandidates(root, selectors) {
     const matches = [];
     selectors.forEach((selector) => {
@@ -1158,16 +1148,6 @@
     return Array.from(new Set(elements));
   }
 
-  function findToolbarAnchor(node) {
-    for (const selector of SELECTORS.messages.toolbarAnchors) {
-      const candidate = node.querySelector(selector);
-      if (candidate instanceof HTMLElement) {
-        return candidate;
-      }
-    }
-    return node.firstElementChild instanceof HTMLElement ? node.firstElementChild : node;
-  }
-
   function createButton(label, variant, action, onClick) {
     const button = document.createElement("button");
     button.type = "button";
@@ -1176,6 +1156,7 @@
     button.textContent = label;
     button.dataset.action = action;
     button.addEventListener("click", (event) => {
+      if (!ensureActiveContext()) return;
       event.preventDefault();
       event.stopPropagation();
       onClick();
@@ -1237,8 +1218,12 @@
   }
 
   function isCollapsed(messageId) {
-    const placeholder = state.placeholderMap.get(messageId);
-    return Boolean(placeholder && placeholder.isConnected);
+    const node = state.collapsedNodes.get(messageId);
+    return Boolean(
+      node
+      && node.isConnected
+      && node.classList.contains(`${EXTENSION_PREFIX}-collapsed`)
+    );
   }
 
   function showToast(message) {
@@ -1266,8 +1251,51 @@
   }
 
   function handleSoftError(error) {
+    if (handleInvalidatedContext(error)) return;
     if (state.settings.debugMode) {
       console.warn("[ChatGPT Thread Lite] soft error", error);
     }
+  }
+
+  function handleInvalidatedContext(error) {
+    if (state.stopped || /extension context invalidated/i.test(String(error?.message || error))) {
+      stopContentScript();
+      return true;
+    }
+    return false;
+  }
+
+  function ensureActiveContext() {
+    if (state.stopped) return false;
+    try {
+      if (chrome.runtime?.id) return true;
+    } catch (_) {
+      // A reloaded extension leaves this old content script without a runtime.
+    }
+    stopContentScript();
+    return false;
+  }
+
+  function stopContentScript() {
+    if (state.stopped) return;
+    state.stopped = true;
+    disconnectObserver();
+    clearTimeout(state.scanTimer);
+    clearTimeout(state.latestToastTimer);
+    clearInterval(state.urlTimer);
+    document.removeEventListener('click', handleCollapsedMessageActivation, true);
+    document.removeEventListener('keydown', handleCollapsedMessageActivation, true);
+    window.removeEventListener('scroll', scheduleMessageControlPositionUpdate, true);
+    window.removeEventListener('resize', scheduleMessageControlPositionUpdate);
+    window.removeEventListener('beforeunload', stopContentScript);
+    clearMessageControls();
+    removeGlobalControls();
+    // Include a turn whose collapse was interrupted by an API throwing.
+    state.messageRecords.forEach((record) => {
+      expandMessageSync(record.id, { manual: false, persist: false });
+    });
+    state.collapsedNodes.clear();
+    state.messageRecords.clear();
+    document.querySelector(`.${EXTENSION_PREFIX}-toast`)?.remove();
   }
 })();

@@ -1,15 +1,28 @@
 {
+  "messageControlsTopLimitLabel": { "message": "Top scroll limit (px)" },
+  "messageControlsTopLimitHint": { "message": "While scrolling, buttons stop this far below the window top. For example, use 80 to leave room for the header." },
+  "buttonLayout": { "message": "Button position and size" },
+  "buttonLayoutHint": { "message": "Changes are saved and applied automatically. Controls stay within the window." },
+  "messageControlsTitle": { "message": "Message buttons (Collapse / Lock)" },
+  "globalControlsTitle": { "message": "Global buttons (Collapse all / Expand all)" },
+  "resetButtonLayout": { "message": "Reset button position and size" },
+  "messageControlsSizeLabel": { "message": "Button size (%)" },
+  "messageControlsXLabel": { "message": "Horizontal offset (px, positive moves right)" },
+  "messageControlsYLabel": { "message": "Vertical offset (px, positive moves down)" },
+  "globalControlsSizeLabel": { "message": "Button size (%)" },
+  "globalControlsRightLabel": { "message": "Distance from right (px)" },
+  "globalControlsTopLabel": { "message": "Distance from top (px)" },
   "extensionName": {
     "message": "ChatGPT Thread Collapse"
   },
   "extensionDescription": {
-    "message": "Semi-virtualize old assistant messages in long ChatGPT threads to reduce lag while keeping them restorable."
+    "message": "Safely collapse old assistant messages in long ChatGPT threads without removing ChatGPT live page nodes."
   },
   "popupTitle": {
     "message": "ChatGPT Thread Collapse"
   },
   "popupSubtitle": {
-    "message": "Semi-virtualize and lazily restore old assistant messages to reduce long-thread lag."
+    "message": "Collapse old assistant messages without removing ChatGPT live page nodes."
   },
   "enableExtension": {
     "message": "Enable extension"
@@ -17,14 +30,8 @@
   "recentKeepCount": {
     "message": "Keep the latest assistant messages expanded"
   },
-  "keepLatestOnly": {
-    "message": "Keep only the latest assistant message expanded"
-  },
   "collapseComplex": {
     "message": "Prefer collapsing code/math-heavy old messages"
-  },
-  "extremeMemoryMode": {
-    "message": "Extreme memory-saving mode (do not cache full nodes)"
   },
   "debugMode": {
     "message": "Developer debug mode"
@@ -37,9 +44,6 @@
   },
   "currentSummary": {
     "message": "assistant messages: {0}, collapsed: {1}, near viewport: {2}{3}."
-  },
-  "extremeSummarySuffix": {
-    "message": ", extreme memory-saving mode enabled"
   },
   "notChatgptTab": {
     "message": "No manageable ChatGPT conversation was detected in the current tab."
@@ -69,16 +73,10 @@
     "message": "Unable to read the current page state. Make sure this tab is a ChatGPT page."
   },
   "expandAllConfirm": {
-    "message": "Expanding all will restore every collapsed assistant message in the current thread and may reintroduce a lot of DOM, which can hurt performance briefly. Continue?"
+    "message": "Expanding all will restore every collapsed assistant message and may briefly increase layout and paint work. Continue?"
   },
   "resetSessionConfirm": {
     "message": "This will clear manual expand, lock, and collapsed records for the current thread. Continue?"
-  },
-  "cannotExpandExtreme": {
-    "message": "Full restore is unavailable in extreme memory-saving mode."
-  },
-  "extremeMemoryDisabledExpandNearby": {
-    "message": "Nearby restore is unavailable in extreme memory-saving mode."
   },
   "assistantMessage": {
     "message": "Assistant message"
@@ -94,9 +92,6 @@
   },
   "clickToRestore": {
     "message": "Click to restore"
-  },
-  "noFullNodeCached": {
-    "message": "No full node cached"
   },
   "expand": {
     "message": "Expand"
@@ -148,5 +143,8 @@
   },
   "recollapsedOldMessages": {
     "message": "Re-applied the current collapse strategy to old messages."
+  },
+  "collapseAll": {
+    "message": "Collapse all messages in this thread"
   }
 }

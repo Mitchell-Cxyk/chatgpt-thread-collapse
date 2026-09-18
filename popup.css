@@ -133,3 +133,20 @@ input[type="checkbox"] {
   margin-top: 10px;
   color: var(--muted);
 }
+
+.layout-subtitle {
+  font-weight: 600;
+  margin: 12px 0 8px;
+}
+
+.layout-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.layout-field input[type="number"] {
+  width: 84px;
+  flex-shrink: 0;
+  padding: 6px;
+}

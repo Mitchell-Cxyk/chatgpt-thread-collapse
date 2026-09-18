@@ -24,35 +24,65 @@
   }
 }
 
-.cgpt-lite-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  margin: 0 0 8px;
+.cgpt-lite-global-controls {
+  position: fixed;
+  top: 72px;
+  right: 18px;
+  z-index: 2147483646;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: calc(5px * var(--ctl-scale, 1));
+  padding: calc(4px * var(--ctl-scale, 1));
+  border: 1px solid var(--ctl-border);
+  border-radius: 10px;
+  background: var(--ctl-surface-strong);
+  box-shadow: var(--ctl-shadow);
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-.cgpt-lite-global-controls {
+.cgpt-lite-controls-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483645;
+  pointer-events: none;
+}
+
+.cgpt-lite-message-controls {
+  position: fixed;
   display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: 12px;
-  vertical-align: middle;
+  flex-direction: column;
+  align-items: stretch;
+  gap: calc(3px * var(--ctl-scale, 1));
+  padding: calc(3px * var(--ctl-scale, 1));
+  border: 1px solid var(--ctl-border);
+  border-radius: 8px;
+  background: var(--ctl-surface-strong);
+  box-shadow: var(--ctl-shadow);
+  pointer-events: auto;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  opacity: 0.88;
+  transition: opacity 0.15s ease;
 }
 
-/* Keep React's message node mounted; hide it while the placeholder owns the layout. */
-.cgpt-lite-source-collapsed {
-  display: none !important;
+.cgpt-lite-message-controls:hover,
+.cgpt-lite-message-controls:focus-within,
+.cgpt-lite-message-controls.is-collapsed {
+  opacity: 1;
 }
 
+.cgpt-lite-message-controls .cgpt-lite-btn {
+  padding: calc(3px * var(--ctl-scale, 1)) calc(5px * var(--ctl-scale, 1));
+  font-size: calc(11px * var(--ctl-scale, 1));
+}
 .cgpt-lite-btn {
   appearance: none;
   border: 1px solid var(--ctl-border);
   background: var(--ctl-surface);
   color: var(--ctl-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--ctl-scale, 1));
   line-height: 1.2;
-  padding: 4px 8px;
+  padding: calc(4px * var(--ctl-scale, 1)) calc(8px * var(--ctl-scale, 1));
   border-radius: 999px;
   cursor: pointer;
   transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
@@ -83,32 +113,46 @@
   background: color-mix(in srgb, var(--ctl-primary) 16%, var(--ctl-surface));
 }
 
-.cgpt-lite-placeholder {
+.cgpt-lite-collapsed {
+  position: relative;
+  display: block;
+  min-height: 88px;
+  max-height: 88px;
+  overflow: hidden;
+  contain: layout paint style;
   border: 1px solid var(--ctl-border);
-  background: linear-gradient(180deg, var(--ctl-surface-strong), var(--ctl-surface));
-  color: var(--ctl-text);
   border-radius: 14px;
-  padding: 10px 14px;
-  margin: 8px 0;
-  box-shadow: var(--ctl-shadow);
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  padding: 12px 14px 30px;
+  background: var(--ctl-surface-strong);
+  cursor: pointer;
 }
 
-.cgpt-lite-placeholder-summary {
+.cgpt-lite-collapsed > * {
+  display: none;
+}
+
+.cgpt-lite-collapsed::before {
+  content: attr(data-cgpt-lite-summary);
+  display: block;
+  overflow: hidden;
+  color: var(--ctl-muted);
   font-size: 13px;
   line-height: 1.45;
-  color: var(--ctl-muted);
-  white-space: pre-wrap;
   word-break: break-word;
 }
-
-.cgpt-lite-placeholder-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 8px;
+.cgpt-lite-collapsed::after {
+  content: attr(data-cgpt-lite-hint);
+  position: absolute;
+  right: 14px;
+  bottom: 9px;
+  color: var(--ctl-primary-strong);
+  font-size: 12px;
 }
 
+.cgpt-lite-collapsed:focus-visible {
+  outline: 2px solid var(--ctl-primary);
+  outline-offset: 2px;
+}
 .cgpt-lite-toast {
   position: fixed;
   right: 16px;
@@ -127,3 +171,4 @@
 .cgpt-lite-hidden {
   display: none !important;
 }
+

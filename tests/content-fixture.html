@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Thread Collapse Safety Fixture</title>
+  <link rel="stylesheet" href="../content.css">
+</head>
+<body>
+  <aside id="fixture-status">Local safety fixture</aside>
+  <main><div id="conversation"></div></main>
+  <script>
+    (function () {
+      var messages = {
+        expandAllHeader: "Expand all",
+        collapseAllHeader: "Collapse all",
+        expandAll: "Expand all",
+        assistantMessage: "Assistant messages",
+        collapsedHint: "Old message lightened",
+        clickToRestore: "Click to restore"
+      };
+      var runtimeListener = null;
+      window.chrome = {
+        i18n: {
+          getMessage: function (key, substitutions) {
+            var value = messages[key] || key;
+            (substitutions || []).forEach(function (item, index) {
+              value = value.replace("{" + index + "}", String(item));
+            });
+            return value;
+          }
+        },
+        storage: {
+          local: {
+            get: async function () {
+              return {
+                settings: {
+                  enabled: true,
+                  keepRecentCount: 2,
+                  autoCollapseComplex: true,
+                  debugMode: false,
+                  nearbyExpandCount: 12
+                },
+                sessionStates: {}
+              };
+            },
+            set: async function () {}
+          },
+          onChanged: { addListener: function () {} }
+        },
+        runtime: {
+          id: 'test-extension',
+          onMessage: {
+            addListener: function (listener) { runtimeListener = listener; }
+          }
+        }
+      };
+      window.sendFixtureMessage = function (message) {
+        return new Promise(function (resolve) { runtimeListener(message, {}, resolve); });
+      };
+
+      var conversation = document.getElementById("conversation");
+      for (var index = 0; index < 10; index += 1) {
+        var role = index % 2 === 0 ? "user" : "assistant";
+        var article = document.createElement("article");
+        article.dataset.testid = "conversation-turn-" + index;
+        article.innerHTML = '<div data-message-author-role="' + role + '"><div class="markdown"><p>' + role + ' message ' + index + ' with enough text for detection.</p></div></div>';
+        conversation.appendChild(article);
+      }
+      window.originalTurnNodes = Array.from(document.querySelectorAll("article"));
+    })();
+  </script>
+  <script src="../content.js"></script>  <script>
+    window.setTimeout(function () {
+      var collapsed = document.querySelector("article.cgpt-lite-collapsed");
+      var child = collapsed && collapsed.querySelector("p");
+      if (child) {
+        child.appendChild(document.createTextNode(" React-style update."));
+      }
+
+      window.setTimeout(async function () {
+        var state = await window.sendFixtureMessage({ type: "getPageState" });
+        var identitiesIntact = window.originalTurnNodes.every(function (node) {
+          return node.isConnected && document.querySelector('[data-testid="' + node.dataset.testid + '"]') === node;
+        });
+        document.body.dataset.ready = "true";
+        document.body.dataset.identitiesIntact = String(identitiesIntact);
+        document.body.dataset.assistantCount = String(state.assistantCount);
+        document.body.dataset.collapsedCount = String(state.collapsedCount);
+        document.body.dataset.reactUpdatePreserved = String(Boolean(child && child.isConnected && child.textContent.includes("React-style update.")));
+        document.getElementById("fixture-status").textContent = identitiesIntact ? "PASS" : "FAIL";
+      }, 400);
+    }, 500);
+  </script>
+</body>
+</html>
